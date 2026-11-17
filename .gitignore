@@ -1,0 +1,17 @@
+# Local maintenance docs (kept locally on primary machine only)
+AGENTS.md
+PROJECT.md
+CHANGELOG.md
+
+# Logs, caches, backups and OS files
+*.log
+*.bak
+*.tmp
+.exec-cache.json
+.git-sync-cache.json
+.git-status-cache.json
+.session-cache.json
+.usage-cache.json
+last-payload.json
+.DS_Store
+Thumbs.db

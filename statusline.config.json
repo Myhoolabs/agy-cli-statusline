@@ -1,0 +1,71 @@
+{
+  "$schema": "https://agy-powerline.com/schema/v1.json",
+  "theme": "dark-aurora",
+  "emojis": true,
+  "ascii": false,
+  "color": "auto",
+  "layout": "lines",
+  "language": "en",
+  "pacing": true,
+  "minimalist": false,
+  "rowGap": false,
+  "log": true,
+  "clock": {
+    "hour12": null,
+    "timeZone": "",
+    "locale": ""
+  },
+  "thresholds": {
+    "quotaWarn": 30,
+    "quotaCrit": 10,
+    "contextWarn": 70,
+    "contextCrit": 90,
+    "blink": false
+  },
+  "powerline": {
+    "enabled": true,
+    "separators": [
+      "E0B4"
+    ],
+    "separatorInvert": [
+      false
+    ],
+    "startCaps": [
+      "E0B6"
+    ],
+    "endCaps": [
+      "E0B4"
+    ]
+  },
+  "widgets": [
+    {
+      "id": "context",
+      "compact": true
+    },
+    {
+      "id": "totalTokens",
+      "split": true
+    },
+    {
+      "id": "cacheHit"
+    },
+    {
+      "id": "exec",
+      "cmd": "C:\\Progra~1\\nodejs\\node.exe C:\\Users\\<YOUR_USERNAME>\\.agy-powerline\\turn-elapsed.js",
+      "label": "Turn",
+      "icon": "⏱️",
+      "color": "cyan",
+      "payload": true,
+      "colors": true,
+      "interval": 0,
+      "timeout": 2000
+    },
+    {
+      "id": "separator"
+    },
+    {
+      "id": "model",
+      "raw": true
+    }
+  ]
+}
