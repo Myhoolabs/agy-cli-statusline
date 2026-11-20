@@ -18,8 +18,8 @@
   "thresholds": {
     "quotaWarn": 30,
     "quotaCrit": 10,
-    "contextWarn": 70,
-    "contextCrit": 90,
+    "contextWarn": 60,
+    "contextCrit": 75,
     "blink": false
   },
   "powerline": {
@@ -51,7 +51,7 @@
     },
     {
       "id": "exec",
-      "cmd": "C:\\Progra~1\\nodejs\\node.exe C:\\Users\\<YOUR_USERNAME>\\.agy-powerline\\turn-elapsed.js",
+      "cmd": "C:\\Progra~1\\nodejs\\node.exe --no-warnings C:\\Users\\<YOUR_USERNAME>\\.agy-powerline\\turn-elapsed.js",
       "label": "Turn",
       "icon": "⏱️",
       "color": "cyan",

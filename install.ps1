@@ -33,7 +33,7 @@ function Write-Utf8NoBom {
 # 1. Check Node.js and npx
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
-    throw "Node.js not found in PATH. Please install Node.js (v20+ recommended) first."
+    throw "Node.js not found in PATH. Please install Node.js (v22.5+ / v24+ recommended for node:sqlite) first."
 }
 $npxCmd = Get-Command npx -ErrorAction SilentlyContinue
 if (-not $npxCmd) {
@@ -51,23 +51,27 @@ if ($LASTEXITCODE -ne 0) {
     throw "agy-powerline init failed with exit code $LASTEXITCODE."
 }
 
-# 3. Deploy turn-elapsed.js
+# 3. Deploy session-metrics.js, turn-elapsed.js, and statusline-enrich.js
 $installDir = Join-Path $env:USERPROFILE ".agy-powerline"
 if (-not (Test-Path -LiteralPath $installDir)) {
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 }
 
-$srcTurnScript = Join-Path $PSScriptRoot "turn-elapsed.js"
-$dstTurnScript = Join-Path $installDir "turn-elapsed.js"
-if (-not (Test-Path -LiteralPath $srcTurnScript)) {
-    throw "Missing source file: $srcTurnScript"
+$scriptFiles = @("session-metrics.js", "turn-elapsed.js", "statusline-enrich.js")
+foreach ($scriptName in $scriptFiles) {
+    $srcScript = Join-Path $PSScriptRoot $scriptName
+    $dstScript = Join-Path $installDir $scriptName
+    if (-not (Test-Path -LiteralPath $srcScript)) {
+        throw "Missing source file: $srcScript"
+    }
+    if (Test-Path -LiteralPath $dstScript) {
+        Copy-Item -LiteralPath $dstScript -Destination "$dstScript.bak" -Force
+    }
+    Copy-Item -LiteralPath $srcScript -Destination $dstScript -Force
+    Write-Step "Installed $scriptName -> $dstScript"
 }
-if (Test-Path -LiteralPath $dstTurnScript) {
-    Copy-Item -LiteralPath $dstTurnScript -Destination "$dstTurnScript.bak" -Force
-}
-Copy-Item -LiteralPath $srcTurnScript -Destination $dstTurnScript -Force
-$turnShortPath = Get-ShortPath -TargetPath $dstTurnScript
-Write-Step "Installed turn-elapsed.js -> $dstTurnScript"
+
+$turnShortPath = Get-ShortPath -TargetPath (Join-Path $installDir "turn-elapsed.js")
 
 # 4. Generate statusline.config.json with machine-local short paths
 $srcConfig = Join-Path $PSScriptRoot "statusline.config.json"
@@ -81,7 +85,7 @@ if (Test-Path -LiteralPath $dstConfig) {
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $templateText = [System.IO.File]::ReadAllText($srcConfig, $utf8NoBom)
-$execCmdValue = "$nodeShortPath $turnShortPath"
+$execCmdValue = "$nodeShortPath --no-warnings $turnShortPath"
 $escapedExecCmd = $execCmdValue.Replace('\', '\\').Replace('"', '\"')
 $updatedConfigText = ([regex]'"cmd"\s*:\s*"[^"]*"').Replace(
     $templateText,
@@ -94,10 +98,20 @@ $null = $updatedConfigText | ConvertFrom-Json
 Write-Utf8NoBom -Path $dstConfig -Content $updatedConfigText
 Write-Step "Installed statusline.config.json (exec cmd: $execCmdValue)"
 
-# 5. Verify / update ~/.gemini/antigravity-cli/settings.json
+# 5. Wire statusline.cmd through statusline-enrich.js (in-process calibration + zero-subprocess turn timer)
+$launcherPath = Join-Path $installDir "statusline.cmd"
+if (Test-Path -LiteralPath $launcherPath) {
+    Copy-Item -LiteralPath $launcherPath -Destination "$launcherPath.agy-powerline.bak" -Force
+}
+$escapedNodeForCmd = $nodePath.Replace('"', '').Replace('%', '%%')
+$launcherContent = "@echo off`r`nsetlocal DisableDelayedExpansion`r`n`"$escapedNodeForCmd`" --no-warnings `"%~dp0statusline-enrich.js`" %*`r`n"
+Write-Utf8NoBom -Path $launcherPath -Content $launcherContent
+Write-Step "Updated $launcherPath -> statusline-enrich.js"
+
+# 6. Verify / update ~/.gemini/antigravity-cli/settings.json
 $agyDir = Join-Path $env:USERPROFILE ".gemini\antigravity-cli"
 $settingsPath = Join-Path $agyDir "settings.json"
-$launcherShortPath = Get-ShortPath -TargetPath (Join-Path $installDir "statusline.cmd")
+$launcherShortPath = Get-ShortPath -TargetPath $launcherPath
 $expectedCommand = $launcherShortPath -replace '\\', '/'
 
 if (-not (Test-Path -LiteralPath $agyDir)) {
@@ -142,7 +156,7 @@ if (Test-Path -LiteralPath $settingsPath) {
     Write-Step "Created $settingsPath with statusLine -> $expectedCommand"
 }
 
-# 6. Run agy-powerline doctor
+# 7. Run agy-powerline doctor
 Write-Step "Running npx -y agy-powerline doctor ..."
 & npx -y agy-powerline doctor
 if ($LASTEXITCODE -ne 0) {
