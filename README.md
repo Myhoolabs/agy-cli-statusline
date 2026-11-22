@@ -6,30 +6,46 @@
 
 ## 1. 这是什么？（项目定位与显示效果）
 
-启用本配置后，`agy` 底部状态栏会替换为单行、高信息密度、支持窄屏自适应的实时监控条，左侧展示 4 个经过底层会话数据校准的核心指标，右下角以纯文本原样保留当前模型与思考等级/代号：
+启用本配置后，`agy` 底部状态栏会采用**上轻下稳的双行布局**（类似 Pi Agent 状态栏），支持窄屏自适应与无标题自动折叠：第 1 行左侧展示当前 Thread（会话）名称，第 2 行左侧展示 4 个经过底层会话数据校准的核心指标、右下角以纯文本原样保留当前模型与思考等级/代号：
 
 ```text
+💬 规则配置-Agy插件架构解耦与规则落地
 💾 ●●●●●●●●●●●● 191.6K/512.0K (37.4%) │ 🪙 Tokens: 205.3K↑ 92.9K↓ │ ⚡ Cache hit: 97% │ ⏱️ Turn: 1m 24s               Gemini 4 Neon (XHigh)
 ```
+
+> 当新建空白会话尚未生成标题时，第 1 行会自动隐藏（不占空行，自动退回单行状态栏），待标题生成后再自动浮现。
 
 ### 显示元素与校准后数据口径
 
 | 位置 | 显示元素 | 实现载体 | 口径与颜色预警规则 |
 |---|---|---|---|
-| **左 1** | **上下文占用（换 Thread 预警）** | `statusline-enrich.js` + `context`（`compact: true`） | 自动从当前会话只读 DB（`gen_metadata`）读取模型在 Antigravity 中的**真实有效上限**（如 Gemini 4 Neon / Argon High / Hydrogen XHigh / Orchestrator 为 `512.0K`，Gemini 3 / Hydrogen High / Argon Medium 为 `256.0K`；无 DB 时回退官方值），移除原 `>200k` 硬编码提前全红。<br>按真实占比分级变色：**`<60%` 正常甜点区**、`60%~74.9%` **黄色注意**（512K 约 `307K` / 256K 约 `154K`）、**`≥75%` 全红预警**（512K 约 `384K` / 256K 约 `192K`，在 ~90% 自动 compact 之前提示及时切换新 thread 或手动 `/compact`）。 |
-| **左 2** | **累计输入 / 输出 Token** | `statusline-enrich.js` + `totalTokens`（`split: true`） | 修正 `agy` 原生 `total_input_tokens` 与当前上下文重复的问题，改为直接汇总当前会话所有模型请求（按 response ID 去重）的**真实累计未命中缓存新输入 `↑`** 与 **累计总输出 `↓`**（不含缓存重复读取，更贴近实际 credits 消耗）。 |
-| **左 3** | **本轮累计缓存命中率** | `statusline-enrich.js` + `cacheHit` | 改为计算**当前这一轮**（最新 `USER_INPUT` 之后所有模型调用）的**累计缓存命中率** `turnCacheRead / (turnCacheRead + turnUncachedInput)`（新轮次首请求尚未返回时暂回退展示上一轮累计值），帮助直观估算本轮是否发生缓存失效及 credits 消耗；`≥80%` 绿、`50%~79%` 橙。 |
-| **左 4** | **单轮耗时** | `turn-elapsed.js`（同进程零子进程调用） | 严格按「**发出最新一条消息 → AI 答完交还控制权**」单轮计时：运行中黄色实时跳秒，结束后青色定格。以会话 DB 的 `USER_INPUT` 步号与最终无 `tool_calls` 的 `PLANNER_RESPONSE DONE` 状态为锚点（并自动修复 `agy` 推送 `transcript_path` 缺失 `-cli` 的路径偏差、移除 `reviewing` 误判），**彻底杜绝后台任务残留或丢 `idle` 导致的跨轮累计成整场总耗时问题**。 |
-| **右下角** | **模型与思考等级/代号** | `separator` + `model`（`raw: true`） | 位于 `separator` 弹性间隔右侧，隐藏 `🤖` 图标与前缀标签，原样输出如 `Gemini 4 Neon (XHigh)`、`Orchestrator (Argon)`。 |
+| **第 1 行（左）** | **当前 Thread 名称** | `statusline-enrich.js` + `title`（`icon: "💬"`, `maxWidth: 60`） | 优先从本地 `annotations/<id>.pbtxt` 只读解析最新标题，缺失时回退 `conversation_summaries.db` 与原生 `conversation_title`；即使通过 `agy-session-manager` 改名也能实时同步。<br>`maxWidth: 60` 列可完整容纳 15~25 字中文标题不被提前截断；未命名空白会话自动隐藏整行。 |
+| **第 2 行（左 1）** | **上下文占用（换 Thread 预警）** | `statusline-enrich.js` + `context`（`compact: true`） | 自动从当前会话只读 DB（`gen_metadata`）读取模型在 Antigravity 中的**真实有效上限**（如 Gemini 4 Neon / Argon High / Hydrogen XHigh / Orchestrator 为 `512.0K`，Gemini 3 / Hydrogen High / Argon Medium 为 `256.0K`；无 DB 时回退官方值），移除原 `>200k` 硬编码提前全红。<br>按真实占比分级变色：**`<60%` 正常甜点区**、`60%~74.9%` **黄色注意**（512K 约 `307K` / 256K 约 `154K`）、**`≥75%` 全红预警**（512K 约 `384K` / 256K 约 `192K`，在 ~90% 自动 compact 之前提示及时切换新 thread 或手动 `/compact`）。 |
+| **第 2 行（左 2）** | **累计输入 / 输出 Token** | `statusline-enrich.js` + `totalTokens`（`split: true`） | 修正 `agy` 原生 `total_input_tokens` 与当前上下文重复的问题，改为直接汇总当前会话所有模型请求（按 response ID 去重）的**真实累计未命中缓存新输入 `↑`** 与 **累计总输出 `↓`**（不含缓存重复读取，更贴近实际 credits 消耗）。 |
+| **第 2 行（左 3）** | **本轮累计缓存命中率** | `statusline-enrich.js` + `cacheHit` | 改为计算**当前这一轮**（最新 `USER_INPUT` 之后所有模型调用）的**累计缓存命中率** `turnCacheRead / (turnCacheRead + turnUncachedInput)`（新轮次首请求尚未返回时暂回退展示上一轮累计值），帮助直观估算本轮是否发生缓存失效及 credits 消耗；`≥80%` 绿、`50%~79%` 橙。 |
+| **第 2 行（左 4）** | **单轮耗时** | `turn-elapsed.js`（同进程零子进程调用） | 严格按「**发出最新一条消息 → AI 答完交还控制权**」单轮计时：运行中黄色实时跳秒，结束后青色定格。以会话 DB 的 `USER_INPUT` 步号与最终无 `tool_calls` 的 `PLANNER_RESPONSE DONE` 状态为锚点（并自动修复 `agy` 推送 `transcript_path` 缺失 `-cli` 的路径偏差、移除 `reviewing` 误判），**彻底杜绝后台任务残留或丢 `idle` 导致的跨轮累计成整场总耗时问题**。 |
+| **第 2 行（右下角）** | **模型与思考等级/代号** | `separator` + `model`（`raw: true`） | 位于 `separator` 弹性间隔右侧，隐藏 `🤖` 图标与前缀标签，原样输出如 `Gemini 4 Neon (XHigh)`、`Orchestrator (Argon)`。 |
 
 ### 窄屏自适应规则
 
-- **常规宽度（`≥85` 列，如 100 / 120 / 140 列）**：100 列左右自动去掉左侧文字标签仅留图标与数值，右侧模型名保持原样带括号。
-- **极窄终端（`80` 列）**：自动去掉标签并由 `agy-powerline` 的 `fitRow` 触发模型紧凑缩写（如 `4 Neon·XHigh`、`Orchestrator·Argon`），确保全部 5 项保留不被裁掉。
+- **常规宽度（`≥85` 列，如 100 / 120 / 140 列）**：第 1 行完整显示 `💬 <Thread 名称>`；第 2 行在 100 列左右自动去掉左侧文字标签仅留图标与数值，右侧模型名保持原样带括号。
+- **极窄终端（`80` 列）**：第 1 行（`💬 ` + 最多 60 列）仍可完整容纳 25 字以内的中文标题；第 2 行自动去掉标签并由 `agy-powerline` 的 `fitRow` 触发模型紧凑缩写（如 `4 Neon·XHigh`、`Orchestrator·Argon`），确保全部元素保留不被裁掉。
 
 ---
 
-## 2. 最近更新说明（v2.0 — 2026-11-20）
+## 2. 最近更新说明
+
+### v2.1 — 2026-11-23（新增第 1 行 Thread 名称显示）
+
+1. **双行状态栏：第 1 行左侧显示当前 Thread 名称**
+   - 在 [statusline.config.json](statusline.config.json) 顶部新增 `title`（`icon: "💬"`, `maxWidth: 60`）与 `lineBreak`，保留第 2 行原有 5 项指标与右下角模型名不变；
+   - 借助 `agy-powerline` 原生中文双倍列宽计算与 `60` 列上限，15~25 字中文会话标题可完整显示不被提前截断；
+   - 新建空白会话无标题时自动隐藏第 1 行（无多余空行），退回单行显示。
+2. **本地 Thread 标题只读校准（`annotations/<id>.pbtxt` + `conversation_summaries.db`）**
+   - 在 `session-metrics.js` 新增 `readSessionTitle()` 与 `parseAnnotationTitle()`（支持 protobuf text format 常见转义及八进制 UTF-8 字节序列还原）；
+   - `statusline-enrich.js` 优先读取本机 `annotations/<id>.pbtxt`（其次只读查询 `conversation_summaries.db`）覆盖/补全 `conversation_title`，确保改名或未推送标题时依然准确同步。
+
+### v2.0 — 2026-11-20（数据校准与稳定性重构）
 
 本次是一次全面的**数据校准与稳定性重构**，重点解决了生产使用中排查出的 4 类真实问题：
 
@@ -54,9 +70,9 @@
 agy-cli-statusline/
 ├── README.md               # 项目说明、指标口径、更新说明与安装指南
 ├── install.ps1             # Windows PowerShell 一键安装/升级与自检脚本
-├── session-metrics.js      # 零依赖只读解析器（路径纠偏 + node:sqlite 读取真实上限/Token/缓存/轮次）
+├── session-metrics.js      # 零依赖只读解析器（路径纠偏 + node:sqlite 读取真实上限/Token/缓存/轮次/Thread 标题）
 ├── statusline-enrich.js    # 同进程前置数据校准与渲染包装入口（零魔改 agy-powerline 本体）
-├── statusline.config.json  # 已调优的 agy-powerline 配置模板（60%/75% 上下文阈值）
+├── statusline.config.json  # 已调优的 agy-powerline 双行配置模板（第 1 行 Thread 标题 + 第 2 行 60%/75% 上下文阈值）
 └── turn-elapsed.js         # 单轮耗时秒表（支持被 wrapper 同进程调用，也支持独立 CLI 兜底）
 ```
 
@@ -84,7 +100,7 @@ agy-cli-statusline/
 1. 克隆或拉取最新 main 分支代码，阅读 README.md 了解文件结构与校准机制；
 2. 备份现有的 ~/.gemini/antigravity-cli/settings.json、~/.agy-powerline/statusline.config.json 与 statusline.cmd；
 3. 运行仓库中的 install.ps1（会自动初始化/升级 agy-powerline、部署 session-metrics.js / turn-elapsed.js / statusline-enrich.js、生成 statusline.config.json 与 statusline.cmd、核对 settings.json 并运行 doctor）；
-4. 确认 npx -y agy-powerline doctor 显示 spawn ok 与 problem log empty，并注入真实会话 JSON 验证 5 项指标均正确渲染且退出码为 0。
+4. 确认 npx -y agy-powerline doctor 显示 spawn ok 与 problem log empty，并注入真实会话与无标题会话 JSON 验证：有标题时双行正确渲染（第 1 行 💬 Thread 名称 + 第 2 行 5 项指标），无标题时自动折叠为单行且退出码为 0。
 ```
 
 ---

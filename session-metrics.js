@@ -96,16 +96,34 @@ function resolveSessionFiles(payload) {
   }
 
   let dbPath = null;
-  if (conversationId) {
-    const dataDirs = [inferCliDataDir(transcriptPath), defaultCliDataDir()];
-    const seen = new Set();
-    for (const dir of dataDirs) {
-      if (!dir || seen.has(dir)) continue;
-      seen.add(dir);
-      const candidate = path.join(dir, "conversations", `${conversationId}.db`);
-      if (fileExists(candidate)) {
-        dbPath = candidate;
-        break;
+  let annotationPath = null;
+  let summariesDbPath = null;
+  const dataDirs = [inferCliDataDir(transcriptPath), defaultCliDataDir()];
+  const seenDirs = new Set();
+
+  for (const dir of dataDirs) {
+    if (!dir || seenDirs.has(dir)) continue;
+    seenDirs.add(dir);
+
+    if (conversationId) {
+      if (!dbPath) {
+        const dbCandidate = path.join(dir, "conversations", `${conversationId}.db`);
+        if (fileExists(dbCandidate)) {
+          dbPath = dbCandidate;
+        }
+      }
+      if (!annotationPath) {
+        const annCandidate = path.join(dir, "annotations", `${conversationId}.pbtxt`);
+        if (fileExists(annCandidate)) {
+          annotationPath = annCandidate;
+        }
+      }
+    }
+
+    if (!summariesDbPath) {
+      const sumCandidate = path.join(dir, "conversation_summaries.db");
+      if (fileExists(sumCandidate)) {
+        summariesDbPath = sumCandidate;
       }
     }
   }
@@ -116,7 +134,147 @@ function resolveSessionFiles(payload) {
     transcriptPath: transcriptPath || (rawTranscript || null),
     transcriptExists: Boolean(transcriptPath),
     dbPath,
+    annotationPath,
+    summariesDbPath,
   };
+}
+
+function normalizeTitle(text) {
+  if (typeof text !== "string") return "";
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function unescapePbtxtString(escaped) {
+  if (typeof escaped !== "string" || !escaped) return "";
+  let out = "";
+  let byteBuf = [];
+
+  const flushBytes = () => {
+    if (byteBuf.length > 0) {
+      out += Buffer.from(byteBuf).toString("utf8");
+      byteBuf = [];
+    }
+  };
+
+  for (let i = 0; i < escaped.length; i += 1) {
+    const ch = escaped[i];
+    if (ch !== "\\" || i + 1 >= escaped.length) {
+      flushBytes();
+      out += ch;
+      continue;
+    }
+
+    const next = escaped[i + 1];
+    if (next >= "0" && next <= "7") {
+      const octMatch = escaped.slice(i + 1, i + 4).match(/^[0-7]{1,3}/);
+      if (octMatch) {
+        byteBuf.push(parseInt(octMatch[0], 8) & 0xff);
+        i += octMatch[0].length;
+        continue;
+      }
+    }
+
+    if (next === "x" || next === "X") {
+      const hexMatch = escaped.slice(i + 2, i + 4).match(/^[0-9a-fA-F]{2}/);
+      if (hexMatch) {
+        byteBuf.push(parseInt(hexMatch[0], 16) & 0xff);
+        i += 1 + hexMatch[0].length;
+        continue;
+      }
+    }
+
+    flushBytes();
+
+    if (next === "u") {
+      const uMatch = escaped.slice(i + 2, i + 6).match(/^[0-9a-fA-F]{4}/);
+      if (uMatch) {
+        out += String.fromCodePoint(parseInt(uMatch[0], 16));
+        i += 5;
+        continue;
+      }
+    } else if (next === "U") {
+      const uMatch = escaped.slice(i + 2, i + 10).match(/^[0-9a-fA-F]{8}/);
+      if (uMatch) {
+        const cp = parseInt(uMatch[0], 16);
+        if (cp <= 0x10ffff) {
+          out += String.fromCodePoint(cp);
+        }
+        i += 9;
+        continue;
+      }
+    }
+
+    const simpleEscapes = {
+      '"': '"',
+      "'": "'",
+      "\\": "\\",
+      n: "\n",
+      r: "\r",
+      t: "\t",
+      a: "\x07",
+      b: "\b",
+      f: "\f",
+      v: "\v",
+    };
+    if (Object.hasOwn(simpleEscapes, next)) {
+      out += simpleEscapes[next];
+      i += 1;
+      continue;
+    }
+
+    out += next;
+    i += 1;
+  }
+
+  flushBytes();
+  return out;
+}
+
+function parseAnnotationTitle(pbtxtText) {
+  if (typeof pbtxtText !== "string" || !pbtxtText) return null;
+  const match = pbtxtText.match(/(?:^|[\s{])title\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (!match) return null;
+  const title = normalizeTitle(unescapePbtxtString(match[1]));
+  return title || null;
+}
+
+function readSessionTitle(files) {
+  if (files?.annotationPath && fileExists(files.annotationPath)) {
+    try {
+      const raw = fs.readFileSync(files.annotationPath, "utf8");
+      const parsed = parseAnnotationTitle(raw);
+      if (parsed) return parsed;
+    } catch {
+      // Ignore annotation read errors and fall back to summaries DB.
+    }
+  }
+
+  if (files?.conversationId && files?.summariesDbPath && fileExists(files.summariesDbPath)) {
+    const DatabaseSync = getDatabaseSync();
+    if (DatabaseSync) {
+      let db;
+      try {
+        db = new DatabaseSync(files.summariesDbPath, { readOnly: true, timeout: 250 });
+        const row = db
+          .prepare("SELECT title FROM conversation_summaries WHERE conversation_id = ?")
+          .get(files.conversationId);
+        const title = normalizeTitle(row?.title);
+        if (title) return title;
+      } catch {
+        // Missing table or locked DB; fall back cleanly.
+      } finally {
+        if (db) {
+          try {
+            db.close();
+          } catch {
+            // Ignore close errors.
+          }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 // --- Minimal safe protobuf wire decoder (no 32-bit bitwise truncation) ---
@@ -400,4 +558,6 @@ function readSessionDbMetrics(dbPath) {
 module.exports = {
   resolveSessionFiles,
   readSessionDbMetrics,
+  readSessionTitle,
+  parseAnnotationTitle,
 };

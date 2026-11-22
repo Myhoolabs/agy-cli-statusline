@@ -39,6 +39,14 @@
   },
   "widgets": [
     {
+      "id": "title",
+      "icon": "💬",
+      "maxWidth": 60
+    },
+    {
+      "id": "lineBreak"
+    },
+    {
       "id": "context",
       "compact": true
     },

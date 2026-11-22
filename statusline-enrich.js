@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // In-process payload calibration wrapper for agy-powerline on Antigravity CLI.
-// Calibrates effective model context cap, cumulative uncached input/output tokens,
+// Calibrates thread title, effective model context cap, cumulative uncached input/output tokens,
 // current-turn cumulative cache hit rate, and zero-subprocess turn elapsed stopwatch.
 "use strict";
 
@@ -8,7 +8,7 @@ const path = require("path");
 const childProcess = require("child_process");
 const { PassThrough } = require("stream");
 
-const { resolveSessionFiles, readSessionDbMetrics } = require("./session-metrics");
+const { resolveSessionFiles, readSessionDbMetrics, readSessionTitle } = require("./session-metrics");
 const { computeTurnElapsed } = require("./turn-elapsed");
 
 const STDIN_TIMEOUT_MS = 1000;
@@ -42,6 +42,13 @@ function enrichPayload(data) {
 
   const files = resolveSessionFiles(data);
   const db = readSessionDbMetrics(files.dbPath);
+
+  const localTitle = readSessionTitle(files);
+  if (localTitle) {
+    data.conversation_title = localTitle;
+  } else if (typeof data.conversation_title === "string") {
+    data.conversation_title = data.conversation_title.replace(/\s+/g, " ").trim();
+  }
 
   if (files.transcriptExists && files.transcriptPath) {
     data.transcript_path = files.transcriptPath;
