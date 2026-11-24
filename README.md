@@ -24,16 +24,24 @@
 | **第 2 行（左 2）** | **累计输入 / 输出 Token** | `statusline-enrich.js` + `totalTokens`（`split: true`） | 修正 `agy` 原生 `total_input_tokens` 与当前上下文重复的问题，改为直接汇总当前会话所有模型请求（按 response ID 去重）的**真实累计未命中缓存新输入 `↑`** 与 **累计总输出 `↓`**（不含缓存重复读取，更贴近实际 credits 消耗）。 |
 | **第 2 行（左 3）** | **本轮累计缓存命中率** | `statusline-enrich.js` + `cacheHit` | 改为计算**当前这一轮**（最新 `USER_INPUT` 之后所有模型调用）的**累计缓存命中率** `turnCacheRead / (turnCacheRead + turnUncachedInput)`（新轮次首请求尚未返回时暂回退展示上一轮累计值），帮助直观估算本轮是否发生缓存失效及 credits 消耗；`≥80%` 绿、`50%~79%` 橙。 |
 | **第 2 行（左 4）** | **单轮耗时** | `turn-elapsed.js`（同进程零子进程调用） | 严格按「**发出最新一条消息 → AI 答完交还控制权**」单轮计时：运行中黄色实时跳秒，结束后青色定格。以会话 DB 的 `USER_INPUT` 步号与最终无 `tool_calls` 的 `PLANNER_RESPONSE DONE` 状态为锚点（并自动修复 `agy` 推送 `transcript_path` 缺失 `-cli` 的路径偏差、移除 `reviewing` 误判），**彻底杜绝后台任务残留或丢 `idle` 导致的跨轮累计成整场总耗时问题**。 |
-| **第 2 行（右下角）** | **模型与思考等级/代号** | `separator` + `model`（`raw: true`） | 位于 `separator` 弹性间隔右侧，隐藏 `🤖` 图标与前缀标签，原样输出如 `Gemini 4 Neon (XHigh)`、`Orchestrator (Argon)`。 |
+| **第 2 行（右下角）** | **模型与思考等级 / Orchestrator 双模型** | `statusline-enrich.js` + `separator` + `model`（`raw: true`） | 位于 `separator` 弹性间隔右侧，隐藏 `🤖` 图标与前缀标签：<br>- 普通单模型原样输出（如 `Gemini 4 Neon (XHigh)`）；<br>- **Orchestrator 双模型**自动从会话 DB `executor_metadata` 与 `settings.json` 读取真实 Planner / Executor 模型，按 `agy -r` 同款紧凑格式显示（如 `Orch (Neon High / Hydrogen Med)`）；宽屏保留思考等级，窄屏自动隐去思考等级保排版。 |
 
 ### 窄屏自适应规则
 
-- **常规宽度（`≥85` 列，如 100 / 120 / 140 列）**：第 1 行完整显示 `💬 <Thread 名称>`；第 2 行在 100 列左右自动去掉左侧文字标签仅留图标与数值，右侧模型名保持原样带括号。
-- **极窄终端（`80` 列）**：第 1 行（`💬 ` + 最多 60 列）仍可完整容纳 25 字以内的中文标题；第 2 行自动去掉标签并由 `agy-powerline` 的 `fitRow` 触发模型紧凑缩写（如 `4 Neon·XHigh`、`Orchestrator·Argon`），确保全部元素保留不被裁掉。
+- **常规宽度（`≥110` 列，如 120 / 140 列）**：第 1 行完整显示 `💬 <Thread 名称>`；第 2 行左侧在 ~105 列以上保留标签，Orchestrator 右侧完整保留思考等级（如 `Orch (Neon High / Hydrogen Med)`）。
+- **窄屏 / 极窄终端（`80~105` 列）**：第 1 行（`💬 ` + 最多 60 列）仍可完整容纳 25 字以内的中文标题；第 2 行自动去掉左侧文字标签仅留图标与数值，同时 Orchestrator 自动隐去思考等级（降为 `Orch (Neon / Hydrogen)`），防止第 2 行左侧指标被挤掉或触发丑陋截断。
 
 ---
 
 ## 2. 最近更新说明
+
+### v2.2 — 2026-11-24（Orchestrator 真实双模型显示与窄屏自适应）
+
+1. **右下角显示真实 Planner / Executor 双模型（对齐 `agy -r` 选单格式）**
+   - 解决 `agy` 在 Orchestrator 模式下统一发送 `Orchestrator (Neon)` 导致无法区分主模型（Neon / Argon / Carbon / Opus 5.5 等）的问题；
+   - 在 `session-metrics.js` 中新增 `executor_metadata` protobuf 解析与 `settings.json` 只读回退，按「**新建空白会话读全局 `settings.json` → 历史/恢复会话读各自 DB → 会话中途 `/model` 切换即时响应**」优先级准确输出 `Orch (Neon High / Hydrogen Med)`；普通单模型保持原样。
+2. **窄屏自动隐去思考等级**
+   - 在 `statusline-enrich.js` 中根据 `terminal_width` 与第 2 行左侧预估宽度自动判断是否隐藏思考等级：宽屏显示 `Orch (Neon High / Hydrogen Med)`，窄屏自动收窄为 `Orch (Neon / Hydrogen)`，保住第 2 行左侧 4 项指标不被挤掉。
 
 ### v2.1 — 2026-11-23（新增第 1 行 Thread 名称显示）
 

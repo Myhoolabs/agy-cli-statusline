@@ -98,6 +98,8 @@ function resolveSessionFiles(payload) {
   let dbPath = null;
   let annotationPath = null;
   let summariesDbPath = null;
+  let settingsPath = null;
+  let lockPath = null;
   const dataDirs = [inferCliDataDir(transcriptPath), defaultCliDataDir()];
   const seenDirs = new Set();
 
@@ -118,12 +120,25 @@ function resolveSessionFiles(payload) {
           annotationPath = annCandidate;
         }
       }
+      if (!lockPath) {
+        const lockCandidate = path.join(dir, "presence", `${conversationId}.lock`);
+        if (fileExists(lockCandidate)) {
+          lockPath = lockCandidate;
+        }
+      }
     }
 
     if (!summariesDbPath) {
       const sumCandidate = path.join(dir, "conversation_summaries.db");
       if (fileExists(sumCandidate)) {
         summariesDbPath = sumCandidate;
+      }
+    }
+
+    if (!settingsPath) {
+      const settingsCandidate = path.join(dir, "settings.json");
+      if (fileExists(settingsCandidate)) {
+        settingsPath = settingsCandidate;
       }
     }
   }
@@ -136,6 +151,8 @@ function resolveSessionFiles(payload) {
     dbPath,
     annotationPath,
     summariesDbPath,
+    settingsPath,
+    lockPath,
   };
 }
 
@@ -412,10 +429,212 @@ function plannerHasToolCalls(payloadBlob) {
   return Boolean(toolCalls && toolCalls.length > 0);
 }
 
+const SLUG_TO_LABEL = {
+  "gemini-4-neon-low": "Gemini 4 Neon (Low)",
+  "gemini-4-neon-medium": "Gemini 4 Neon (Medium)",
+  "gemini-4-neon-high": "Gemini 4 Neon (High)",
+  "gemini-4-neon-xhigh": "Gemini 4 Neon (XHigh)",
+  "gemini-4-carbon-low": "Gemini 4 Carbon (Low)",
+  "gemini-4-carbon-medium": "Gemini 4 Carbon (Medium)",
+  "gemini-4-carbon-high": "Gemini 4 Carbon (High)",
+  "gemini-4-argon-low": "Gemini 4 Argon (Low)",
+  "gemini-4-argon-medium": "Gemini 4 Argon (Medium)",
+  "gemini-4-argon-high": "Gemini 4 Argon (High)",
+  "gemini-4-hydrogen-low": "Gemini 4 Hydrogen (Low)",
+  "gemini-4-hydrogen-medium": "Gemini 4 Hydrogen (Medium)",
+  "gemini-4-hydrogen-high": "Gemini 4 Hydrogen (High)",
+  "gemini-4-hydrogen-xhigh": "Gemini 4 Hydrogen (XHigh)",
+  "gemini-3.8-flash-low": "Gemini 3.8 Flash (Low)",
+  "gemini-3.8-flash-medium": "Gemini 3.8 Flash (Medium)",
+  "gemini-3.8-flash-high": "Gemini 3.8 Flash (High)",
+  "claude-opus-5-5-low": "Claude Opus 5.5 (Low)",
+  "claude-opus-5-5-medium": "Claude Opus 5.5 (Medium)",
+  "claude-opus-5-5-high": "Claude Opus 5.5 (High)",
+  "claude-sonnet-5-5-low": "Claude Sonnet 5.5 (Low)",
+  "claude-sonnet-5-5-medium": "Claude Sonnet 5.5 (Medium)",
+  "claude-sonnet-5-5-high": "Claude Sonnet 5.5 (High)",
+  "gpt-oss-120b-medium": "GPT-OSS 120B (Medium)",
+  "gemini-pro-orchestrator-neon": "Orchestrator (Neon)",
+  "gemini-pro-orchestrator": "Orchestrator (Carbon)",
+  "gemini-pro-orchestrator-argon": "Orchestrator (Argon)",
+  "gemini-pro-orchestrator-g1-pro": "Orchestrator (Argon)",
+};
+
+const MODEL_ENUM_TO_SLUG = {
+  342: "gpt-oss-120b-medium",
+  1318: "gemini-3.8-flash-high",
+  1402: "claude-opus-5-5-high",
+  1405: "claude-sonnet-5-5-high",
+  1417: "gemini-4-argon-high",
+  1418: "gemini-4-argon-medium",
+  1427: "gemini-4-carbon-high",
+  1525: "gemini-4-hydrogen-high",
+  1526: "gemini-4-hydrogen-medium",
+  1527: "gemini-4-hydrogen-low",
+  1528: "gemini-4-hydrogen-xhigh",
+  1532: "gemini-4-neon-high",
+  1533: "gemini-4-neon-medium",
+  1535: "gemini-4-neon-xhigh",
+  1537: "gemini-pro-orchestrator-neon",
+  1668: "gemini-pro-orchestrator-g1-pro",
+  1669: "gemini-flash-worker-agy",
+};
+
+const LEGACY_ORCHESTRATOR_PLANNER_SLUGS = new Set([
+  "gemini-pro-orchestrator-neon",
+  "gemini-pro-orchestrator-g1-pro",
+]);
+
+const LEGACY_ORCHESTRATOR_WORKER_SLUGS = new Set(["gemini-flash-worker-agy"]);
+
+const EFFORT_SHORT_MAP = {
+  low: "Low",
+  medium: "Med",
+  high: "High",
+  xhigh: "XHigh",
+  max: "Max",
+};
+
+/**
+ * Format a model label or slug into compact `agy -r` style (e.g. `Neon High`, `Hydrogen Med`).
+ */
+function compactModelName(raw, { includeEffort = true } = {}) {
+  const input = String(raw ?? "").trim();
+  if (!input) return "";
+
+  const mapped = SLUG_TO_LABEL[input.toLowerCase()];
+  const text = mapped || input;
+
+  // Human label format (contains whitespace or trailing "(...)").
+  if (/\s/.test(text) || /\([^)]+\)\s*$/.test(text)) {
+    let effort = "";
+    let base = text;
+    const m = text.match(/^(.*?)\s*\((Low|Medium|High|XHigh|Max)\)\s*$/i);
+    if (m) {
+      base = m[1].trim();
+      effort = EFFORT_SHORT_MAP[m[2].toLowerCase()] || m[2];
+    }
+    const shortBase =
+      base.replace(/^(?:Gemini|Claude)\s+(?:\d+(?:\.\d+)?\s+)?/i, "").trim() || base;
+    return includeEffort && effort ? `${shortBase} ${effort}` : shortBase;
+  }
+
+  // Fallback for unknown future slugs (e.g. `gemini-4-carbon-xhigh`, `claude-opus-6-0-high`).
+  let slug = text.toLowerCase();
+  let effort = "";
+  const effortMatch = slug.match(/-(low|medium|high|xhigh|max)$/);
+  if (effortMatch) {
+    effort = EFFORT_SHORT_MAP[effortMatch[1]] || effortMatch[1];
+    slug = slug.slice(0, effortMatch.index);
+  }
+  slug = slug.replace(/^(?:gemini-\d+(?:\.\d+)?-|claude-)/, "");
+  slug = slug.replace(/(\d+)-(\d+)/g, "$1.$2");
+  const shortBase = slug
+    .split("-")
+    .filter(Boolean)
+    .map((part) => (/^\d/.test(part) ? part : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join(" ");
+  if (!shortBase) return text;
+  return includeEffort && effort ? `${shortBase} ${effort}` : shortBase;
+}
+
+/**
+ * Format Planner / Executor pair into `Orch (Neon High / Hydrogen Med)` or `Orch (Neon / Hydrogen)`.
+ */
+function formatOrchestratorDisplay(
+  plannerRaw,
+  executorRaw,
+  fallbackDisplay,
+  { includeEffort = true } = {}
+) {
+  const p = compactModelName(plannerRaw, { includeEffort });
+  const e = compactModelName(executorRaw, { includeEffort });
+  if (p && e) return `Orch (${p} / ${e})`;
+  if (p) return `Orch (${p})`;
+  if (e) return `Orch (? / ${e})`;
+  return fallbackDisplay || "";
+}
+
+/**
+ * Decode one `executor_metadata.data` protobuf row into `{ modelEnum, slug, hasPlanExecute, execEnum }`.
+ */
+function parseExecutorMetaRow(buf) {
+  let modelEnum = null;
+  let slug = "";
+  let hasPlanExecute = false;
+  let execEnum = null;
+
+  const top = decodeMessage(buf);
+  const f10List = top.get(10) || [];
+  for (const val of f10List) {
+    if (!(val instanceof Uint8Array)) continue;
+    const sub1 = decodeMessage(val);
+    const f1List = sub1.get(1) || [];
+    for (const v1 of f1List) {
+      if (!(v1 instanceof Uint8Array)) continue;
+      const sub2 = decodeMessage(v1);
+
+      const mEnum = firstInt(sub2, 1);
+      if (mEnum !== null) modelEnum = mEnum;
+
+      const sText = firstText(sub2, 28).trim();
+      if (sText) slug = sText;
+
+      const peList = sub2.get(46) || [];
+      for (const peVal of peList) {
+        if (peVal instanceof Uint8Array) {
+          const peText = Buffer.from(peVal.buffer, peVal.byteOffset, peVal.byteLength).toString(
+            "utf8"
+          );
+          if (peText.includes("plan_execute_protocol")) {
+            hasPlanExecute = true;
+          }
+        }
+      }
+
+      const f60List = sub2.get(60) || [];
+      for (const f60Val of f60List) {
+        if (!(f60Val instanceof Uint8Array)) continue;
+        const sub60 = decodeMessage(f60Val);
+        const eEnum = firstInt(sub60, 1);
+        if (eEnum !== null) execEnum = eEnum;
+      }
+    }
+  }
+
+  return { modelEnum, slug, hasPlanExecute, execEnum };
+}
+
+function readSettingsOrchestrator(settingsPath) {
+  if (!settingsPath || !fileExists(settingsPath)) return null;
+  try {
+    const mtimeMs = fs.statSync(settingsPath).mtimeMs;
+    const raw = fs.readFileSync(settingsPath, "utf8").replace(/^\uFEFF/, "");
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object") return null;
+    return {
+      model: typeof obj.model === "string" ? obj.model.trim() : "",
+      planner: typeof obj.orchestrator?.planner === "string" ? obj.orchestrator.planner.trim() : "",
+      executor:
+        typeof obj.orchestrator?.executor === "string" ? obj.orchestrator.executor.trim() : "",
+      mtimeMs,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function readSessionDbMetrics(dbPath) {
   if (!dbPath || !fileExists(dbPath)) return null;
   const DatabaseSync = getDatabaseSync();
   if (!DatabaseSync) return null;
+
+  let dbMtimeMs = null;
+  try {
+    dbMtimeMs = fs.statSync(dbPath).mtimeMs;
+  } catch {
+    dbMtimeMs = null;
+  }
 
   let db;
   try {
@@ -523,6 +742,62 @@ function readSessionDbMetrics(dbPath) {
       // Missing gen_metadata table or empty session; fall back cleanly.
     }
 
+    // Extract latest Orchestrator (Planner / Executor) spec from executor_metadata if present.
+    let orchestrator = null;
+    try {
+      const execRows = db
+        .prepare("SELECT data FROM executor_metadata ORDER BY idx DESC LIMIT 60")
+        .all();
+      const learnedEnums = { ...MODEL_ENUM_TO_SLUG };
+      const parsedExec = [];
+      for (const row of execRows) {
+        if (!row?.data) continue;
+        try {
+          const parsed = parseExecutorMetaRow(row.data);
+          if (parsed.modelEnum !== null && parsed.slug && !Object.hasOwn(learnedEnums, parsed.modelEnum)) {
+            learnedEnums[parsed.modelEnum] = parsed.slug;
+          }
+          if (
+            parsed.modelEnum !== null ||
+            parsed.slug ||
+            parsed.hasPlanExecute ||
+            parsed.execEnum !== null
+          ) {
+            parsedExec.push(parsed);
+          }
+        } catch {
+          // Ignore malformed protobuf row.
+        }
+      }
+
+      if (parsedExec.length > 0) {
+        const latest = parsedExec[0];
+        if (latest.hasPlanExecute || latest.execEnum !== null) {
+          const targetExecEnum = latest.execEnum;
+          let plannerSlug = "";
+          let executorSlug = "";
+          for (const row of parsedExec) {
+            if (!row.hasPlanExecute && row.execEnum === null) break;
+            if (targetExecEnum !== null && row.modelEnum === targetExecEnum) {
+              if (!executorSlug && row.slug) executorSlug = row.slug;
+            } else {
+              if (!plannerSlug && row.slug) plannerSlug = row.slug;
+            }
+            if (plannerSlug && executorSlug) break;
+          }
+          if (!executorSlug && targetExecEnum !== null) {
+            executorSlug = learnedEnums[targetExecEnum] || "";
+          }
+          const isLegacy =
+            LEGACY_ORCHESTRATOR_PLANNER_SLUGS.has(plannerSlug) &&
+            (!executorSlug || LEGACY_ORCHESTRATOR_WORKER_SLUGS.has(executorSlug));
+          orchestrator = { plannerSlug, executorSlug, isLegacy };
+        }
+      }
+    } catch {
+      // Missing executor_metadata table or empty session; fall back cleanly.
+    }
+
     const isTurnFinished = Boolean(
       currentTurn &&
         currentTurn.lastStepIdx > currentTurn.userStepIdx &&
@@ -541,6 +816,8 @@ function readSessionDbMetrics(dbPath) {
       prevTurn,
       currentTurn,
       isTurnFinished,
+      orchestrator,
+      dbMtimeMs,
     };
   } catch {
     return null;
@@ -560,4 +837,8 @@ module.exports = {
   readSessionDbMetrics,
   readSessionTitle,
   parseAnnotationTitle,
+  readSettingsOrchestrator,
+  compactModelName,
+  formatOrchestratorDisplay,
+  parseExecutorMetaRow,
 };
